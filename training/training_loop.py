@@ -1,6 +1,6 @@
 """
 ================================================================================
-LLM Learning Module 9: TRAINING
+TRAINING PIPELINE
 ================================================================================
 
 This module covers the training pipeline for LLMs:
@@ -641,7 +641,7 @@ def demo():
     5. Regular evaluation helps detect overfitting
     6. Save checkpoints regularly to avoid losing progress
 
-    Next: 10_advanced.py - Advanced Topics (Muon, CLIP, etc.)
+    Next: training/optimizers_and_checkpoint.py - Advanced Optimizers
     """)
 
 

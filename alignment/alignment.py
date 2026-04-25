@@ -1,6 +1,6 @@
 """
 ================================================================================
-LLM Learning Module 13: MODEL ALIGNMENT
+MODEL ALIGNMENT
 ================================================================================
 
 Techniques to align LLMs with human preferences and values:
@@ -830,7 +830,7 @@ def demo():
     4. Constitutional AI: Self-critique without human feedback
     5. Start with DPO, add complexity only if needed
 
-    Next: 14_multimodal.py - Vision-Language Models
+    Next: alignment/grpo.py - Group Relative Policy Optimization
     """)
 
 

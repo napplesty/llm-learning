@@ -1,6 +1,6 @@
 """
 ================================================================================
-LLM Learning Module 16: GRPO (Group Relative Policy Optimization)
+GRPO (GROUP RELATIVE POLICY OPTIMIZATION)
 ================================================================================
 
 GRPO is a reinforcement learning algorithm introduced by DeepSeek that:

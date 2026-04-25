@@ -1,19 +1,27 @@
 """
 ================================================================================
-LLM Learning Module 4: ROTARY POSITION EMBEDDINGS (RoPE)
+POSITION ENCODINGS: RoPE, p-RoPE & ALiBi
 ================================================================================
 
-What is RoPE?
--------------
-RoPE (Rotary Position Embeddings) encodes position information by rotating
-the query and key vectors in the embedding space. Unlike absolute positional
-embeddings, RoPE naturally captures relative positions through rotation.
+This module covers modern position encoding techniques used in LLMs:
+
+1. RoPE (Rotary Position Embeddings) - rotates Q and K vectors
+2. p-RoPE (pruned RoPE) - applies rotation to only a fraction of dimensions
+3. ALiBi (Attention with Linear Biases) - adds distance-based bias to scores
 
 Key Advantages:
 1. Relative position awareness (not just absolute)
 2. Better length extrapolation
 3. No additional parameters to learn
-4. Used in LLaMA, GPT-NeoX, PaLM, and many modern LLMs
+4. Used in LLaMA, PaLM, Mistral, Gemma, and many modern LLMs
+
+================================================================================
+1. ROTARY POSITION EMBEDDINGS (RoPE)
+================================================================================
+
+RoPE encodes position information by rotating the query and key vectors
+in the embedding space. Unlike absolute positional embeddings, RoPE naturally
+captures relative positions through rotation.
 
 ================================================================================
 ILLUSTRATION: How RoPE Works
@@ -209,6 +217,113 @@ class RotaryEmbedding(nn.Module):
         return apply_rotary_emb(xq, xk, freqs_cis)
 
 
+# =============================================================================
+# 2. p-RoPE (Pruned Rotary Position Embeddings)
+# =============================================================================
+
+class PRoPERotaryEmbedding(nn.Module):
+    """
+    Pruned RoPE (p-RoPE) - Gemma 4 Global Attention Style
+
+    Instead of applying rotary position encoding to ALL dimension pairs,
+    p-RoPE only applies it to the first p fraction of pairs.
+    The remaining pairs are left unchanged (no rotation).
+
+    Key insight from Gemma 4:
+    - High-frequency rotation pairs already contain sufficient position info
+    - Low-frequency pairs contribute little positional information
+    - With long contexts, low-frequency small rotations stack up and cause
+      token misalignment across long distances
+    - By pruning (p=0.25), low-frequency pairs preserve semantic meaning
+      without harmful positional noise
+
+    Args:
+        dim: Embedding dimension (d_k for each head)
+        max_seq_len: Maximum sequence length
+        p: Fraction of dimensions to apply RoPE (default 0.25 = Gemma 4)
+        base: Base for frequency computation
+
+    ╔═══════════════════════════════════════════════════════════════════════════╗
+    ║  Standard RoPE vs p-RoPE (dim=64, p=0.25):                                ║
+    ║                                                                           ║
+    ║  RoPE:  All 32 pairs get rotated                                          ║
+    ║         [R,R,R,R,R,R,R,R,R,R,R,R,R,R,R,R,R,R,R,R,R,R,R,R,R,R,R,R,R,R,R,R]║
+    ║                                                                           ║
+    ║  p-RoPE: Only first 8 pairs get rotated (p × dim/2 = 0.25 × 32 = 8)      ║
+    ║          [R,R,R,R,R,R,R,R,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_]║
+    ║          ↑ high freq                      ↑ low freq (no rotation)       ║
+    ║                                                                           ║
+    ║  Gemma 4 uses p=0.25 on GLOBAL attention layers only.                    ║
+    ║  Local (sliding window) layers use standard RoPE.                        ║
+    ╚═══════════════════════════════════════════════════════════════════════════╝
+    """
+
+    def __init__(
+        self,
+        dim: int,
+        max_seq_len: int = 2048,
+        p: float = 0.25,
+        base: float = 10000.0,
+    ):
+        super().__init__()
+        self.dim = dim
+        self.max_seq_len = max_seq_len
+        self.p = p
+        self.base = base
+
+        # Number of pairs to rotate
+        self.num_rotated_pairs = int((dim // 2) * p)
+        self.rotated_dim = self.num_rotated_pairs * 2
+
+        # Precompute and cache frequencies for the rotated portion only
+        if self.rotated_dim > 0:
+            freqs_cis = precompute_freqs_cis(self.rotated_dim, max_seq_len, base)
+            self.register_buffer("freqs_cis", freqs_cis)
+        else:
+            self.freqs_cis = None
+
+    def forward(
+        self,
+        xq: torch.Tensor,
+        xk: torch.Tensor,
+        start_pos: int = 0,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Apply pruned rotary embeddings to queries and keys.
+
+        Args:
+            xq: Query tensor (batch, seq_len, num_heads, d_k)
+            xk: Key tensor (batch, seq_len, num_heads, d_k)
+            start_pos: Starting position
+
+        Returns:
+            Rotated query and key tensors
+        """
+        if self.rotated_dim == 0:
+            return xq, xk
+
+        seq_len = xq.shape[1]
+
+        # Split into rotated and non-rotated portions
+        # xq_rot: first p fraction of dimensions
+        # xq_pass: remaining dimensions (no rotation)
+        xq_rot = xq[..., :self.rotated_dim]
+        xq_pass = xq[..., self.rotated_dim:]
+
+        xk_rot = xk[..., :self.rotated_dim]
+        xk_pass = xk[..., self.rotated_dim:]
+
+        # Apply RoPE only to the rotated portion
+        freqs_cis = self.freqs_cis[start_pos : start_pos + seq_len]
+        xq_rot_out, xk_rot_out = apply_rotary_emb(xq_rot, xk_rot, freqs_cis)
+
+        # Concatenate back: rotated part + pass-through part
+        xq_out = torch.cat([xq_rot_out, xq_pass], dim=-1)
+        xk_out = torch.cat([xk_rot_out, xk_pass], dim=-1)
+
+        return xq_out.type_as(xq), xk_out.type_as(xk)
+
+
 class RoPEAttention(nn.Module):
     """
     Multi-Head Attention with Rotary Position Embeddings
@@ -284,6 +399,94 @@ class RoPEAttention(nn.Module):
         attn_out = attn_out.transpose(1, 2).contiguous().view(batch_size, seq_len, self.d_model)
 
         return self.w_o(attn_out)
+
+
+# =============================================================================
+# 2. ALiBi (Attention with Linear Biases)
+# =============================================================================
+
+class ALiBiAttention(nn.Module):
+    """
+    Attention with Linear Biases (ALiBi).
+
+    Instead of adding positional embeddings, ALiBi adds a static bias
+    to attention scores based on distance. This bias decreases linearly
+    with distance, allowing the model to extrapolate to longer sequences.
+
+    Used in BLOOM, MPT, and some variants of modern LLMs.
+
+    Args:
+        d_model: Model dimension
+        num_heads: Number of attention heads
+        max_seq_len: Maximum sequence length
+
+    ╔═══════════════════════════════════════════════════════════════════════════╗
+    ║  ALiBi Bias Matrix:                                                       ║
+    ║                                                                           ║
+    ║  bias = -m × |i - j|  where m is head-specific slope                      ║
+    ║                                                                           ║
+    ║  For m = 0.5:                                                             ║
+    ║       pos:  0    1    2    3    4                                        ║
+    ║  ┌─────────────────────────────────────┐                                  ║
+    ║  │  0   -0.5  -1.0  -1.5  -2.0  │  pos 0                                 ║
+    ║  │ -0.5   0   -0.5  -1.0  -1.5  │  pos 1                                 ║
+    ║  │ -1.0  -0.5   0   -0.5  -1.0  │  pos 2                                 ║
+    ║  │ -1.5  -1.0  -0.5   0   -0.5  │  pos 3                                 ║
+    ║  │ -2.0  -1.5  -1.0  -0.5   0   │  pos 4                                 ║
+    ║  └─────────────────────────────────────┘                                  ║
+    ║                                                                           ║
+    ║  Different heads use different slopes: m_h = 1 / 2^(8h/H)                ║
+    ║  Head 0: 1/256, Head 1: 1/128, ... (geometric sequence)                  ║
+    ╚═══════════════════════════════════════════════════════════════════════════╝
+    """
+
+    def __init__(self, d_model: int, num_heads: int, max_seq_len: int):
+        super().__init__()
+        self.d_model = d_model
+        self.num_heads = num_heads
+        self.d_k = d_model // num_heads
+
+        self.w_q = nn.Linear(d_model, d_model, bias=False)
+        self.w_k = nn.Linear(d_model, d_model, bias=False)
+        self.w_v = nn.Linear(d_model, d_model, bias=False)
+        self.w_o = nn.Linear(d_model, d_model, bias=False)
+
+        # Compute ALiBi slopes for each head
+        slopes = 1.0 / (2 ** (8 * torch.arange(num_heads) / num_heads))
+        self.register_buffer("slopes", slopes)
+
+        # Precompute distance matrix
+        distance = torch.abs(
+            torch.arange(max_seq_len).unsqueeze(0) -
+            torch.arange(max_seq_len).unsqueeze(1)
+        )
+        self.register_buffer("distance", distance)
+
+        # Causal mask
+        mask = torch.tril(torch.ones(max_seq_len, max_seq_len))
+        self.register_buffer("mask", mask.unsqueeze(0).unsqueeze(0))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        batch_size, seq_len, _ = x.shape
+
+        q = self.w_q(x).view(batch_size, seq_len, self.num_heads, self.d_k).transpose(1, 2)
+        k = self.w_k(x).view(batch_size, seq_len, self.num_heads, self.d_k).transpose(1, 2)
+        v = self.w_v(x).view(batch_size, seq_len, self.num_heads, self.d_k).transpose(1, 2)
+
+        scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.d_k)
+
+        # Add ALiBi bias
+        alibi_bias = -self.slopes.view(-1, 1, 1) * self.distance[:seq_len, :seq_len].unsqueeze(0)
+        scores = scores + alibi_bias.unsqueeze(0)
+
+        # Apply causal mask
+        scores = scores.masked_fill(self.mask[:, :, :seq_len, :seq_len] == 0, float('-inf'))
+
+        attn_weights = torch.softmax(scores, dim=-1)
+        out = torch.matmul(attn_weights, v)
+
+        out = out.transpose(1, 2).contiguous().view(batch_size, seq_len, self.d_model)
+        return self.w_o(out)
 
 
 # =============================================================================
@@ -406,9 +609,56 @@ def demo():
     print(f"Output shape: {out.shape}")
     print(f"Parameters: {sum(p.numel() for p in rope_attn.parameters()):,}")
 
+    # p-RoPE
+    print("\n" + "-" * 80)
+    print("5. p-RoPE (PRUNED RoPE - Gemma 4 Style)")
+    print("-" * 80)
+
+    p_rope = PRoPERotaryEmbedding(d_k, max_seq_len, p=0.25)
+
+    q_p = torch.randn(batch_size, seq_len, num_heads, d_k)
+    k_p = torch.randn(batch_size, seq_len, num_heads, d_k)
+
+    q_rot_p, k_rot_p = p_rope(q_p, k_p)
+
+    print(f"\nOriginal Q shape: {q_p.shape}")
+    print(f"p-RoPE Q shape:   {q_rot_p.shape}")
+    print(f"Pruning ratio p:  {p_rope.p}")
+    print(f"Rotated pairs:    {p_rope.num_rotated_pairs} / {d_k // 2} total pairs")
+    print(f"Rotated dims:     {p_rope.rotated_dim} / {d_k} total dims")
+
+    # Verify that non-rotated portion is unchanged
+    unchanged_portion = torch.allclose(q_p[..., p_rope.rotated_dim:], q_rot_p[..., p_rope.rotated_dim:])
+    print(f"Non-rotated portion unchanged: {unchanged_portion}")
+
+    print("""
+    p-RoPE Benefits (Gemma 4):
+    - Reduces rotation misalignment in long contexts
+    - Low-frequency pairs preserve semantic meaning
+    - Especially useful for GLOBAL attention layers with 256K context
+    - Gemma 4: p=0.25 for global layers, p=1.0 (full RoPE) for local layers
+    """)
+
+    # ALiBi
+    print("\n" + "-" * 80)
+    print("5. ALiBi (ATTENTION WITH LINEAR BIASES)")
+    print("-" * 80)
+
+    alibi_attn = ALiBiAttention(d_model, num_heads, max_seq_len=128)
+    alibi_out = alibi_attn(x)
+
+    print(f"\nALiBi slopes per head: {alibi_attn.slopes.tolist()}")
+    print(f"""
+    ALiBi Benefits:
+    - No learned positional parameters
+    - Better length extrapolation than RoPE
+    - Simple to implement (just add bias)
+    - Works well for training short, inference long
+    """)
+
     # Comparison table
     print("\n" + "-" * 80)
-    print("5. RoPE vs OTHER POSITION ENCODINGS")
+    print("6. POSITION ENCODINGS COMPARISON")
     print("-" * 80)
     print("""
     ┌────────────────────┬──────────────┬──────────────┬──────────────────┐
@@ -418,6 +668,7 @@ def demo():
     │ Learned Absolute   │ max_len × d  │ Poor         │ No               │
     │ Learned Relative   │ max_len² × d │ Poor         │ Yes              │
     │ RoPE               │ 0            │ Excellent    │ Yes (exact)      │
+    │ p-RoPE             │ 0            │ Excellent    │ Yes (partial)    │
     │ ALiBi              │ 0            │ Excellent    │ Yes              │
     └────────────────────┴──────────────┴──────────────┴──────────────────┘
     """)
@@ -434,7 +685,7 @@ def demo():
     6. Better length extrapolation than learned embeddings
     7. Used in LLaMA, PaLM, GPT-NeoX, and many modern LLMs
 
-    Next: 05_swiglu.py - SwiGLU Activation Function
+    Next: position_and_activation/swiglu.py - SwiGLU Activation Function
     """)
 
 

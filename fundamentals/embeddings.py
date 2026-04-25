@@ -1,6 +1,6 @@
 """
 ================================================================================
-LLM Learning Module 2: EMBEDDINGS
+EMBEDDINGS
 ================================================================================
 
 What are Embeddings?
@@ -377,7 +377,7 @@ def demo():
     4. RMSNorm is simpler and faster than LayerNorm (no mean centering)
     5. Scale factor sqrt(d_model) helps with gradient flow
 
-    Next: 03_attention.py - The core of transformer models
+    Next: fundamentals/attention.py - Attention Mechanisms
     """)
 
 

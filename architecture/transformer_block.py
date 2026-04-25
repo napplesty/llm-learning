@@ -1,6 +1,6 @@
 """
 ================================================================================
-LLM Learning Module 7: TRANSFORMER BLOCK
+TRANSFORMER BLOCK
 ================================================================================
 
 What is a Transformer Block?
@@ -483,7 +483,7 @@ def demo():
     5. MoE can scale parameters while keeping compute constant
     6. Residual connections allow gradients to skip layers
 
-    Next: 08_model.py - Complete LLM Model
+    Next: architecture/mixture_of_experts.py - Sparse Architecture (MoE)
     """)
 
 

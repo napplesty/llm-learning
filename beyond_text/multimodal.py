@@ -1,14 +1,15 @@
 """
 ================================================================================
-LLM Learning Module 14: MULTIMODAL / VISION-LANGUAGE MODELS
+MULTIMODAL / VISION-LANGUAGE MODELS
 ================================================================================
 
 Techniques for combining vision and language:
 
-1. Vision Transformer (ViT) - Image patch encoding
-2. Cross-Attention for multimodal fusion
-3. LLaVA-style visual instruction tuning
-4. Flamingo-style perceiver resampler
+1. CLIP Contrastive Learning - Align vision & language representations
+2. Vision Transformer (ViT) - Image patch encoding
+3. Cross-Attention for multimodal fusion
+4. LLaVA-style visual instruction tuning
+5. Flamingo-style perceiver resampler
 
 ================================================================================
 ILLUSTRATION: Vision-Language Architecture
@@ -63,7 +64,215 @@ from dataclasses import dataclass
 
 
 # =============================================================================
-# 1. Vision Transformer (ViT) Components
+# 1. CLIP-style Contrastive Learning
+# =============================================================================
+
+class CLIPStyleEncoder(nn.Module):
+    """
+    CLIP-style encoder for contrastive learning.
+
+    Projects embeddings to a shared space for computing similarities.
+
+    Args:
+        embed_dim: Input embedding dimension
+        projection_dim: Output projection dimension (shared space)
+    """
+
+    def __init__(self, embed_dim: int, projection_dim: int = 512):
+        super().__init__()
+        self.projection = nn.Sequential(
+            nn.Linear(embed_dim, projection_dim),
+            nn.ReLU(),
+            nn.Linear(projection_dim, projection_dim),
+        )
+        self.logit_scale = nn.Parameter(torch.ones([]) * 0.07)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Project embeddings and normalize.
+
+        Args:
+            x: Input embeddings (batch, embed_dim)
+
+        Returns:
+            Normalized projections (batch, projection_dim)
+        """
+        projected = self.projection(x)
+        return F.normalize(projected, dim=-1)
+
+
+def contrastive_loss(
+    image_features: torch.Tensor,
+    text_features: torch.Tensor,
+    logit_scale: torch.Tensor,
+    temperature: float = 1.0,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Compute CLIP-style contrastive loss.
+
+    The loss encourages matching image-text pairs to have high similarity
+    while non-matching pairs have low similarity.
+
+    Args:
+        image_features: Normalized image features (batch, dim)
+        text_features: Normalized text features (batch, dim)
+        logit_scale: Learnable scale parameter
+        temperature: Temperature for scaling logits
+
+    Returns:
+        loss: Combined contrastive loss
+        accuracy: Top-1 accuracy
+
+    ╔═══════════════════════════════════════════════════════════════════════════╗
+    ║  Contrastive Loss Formulation:                                            ║
+    ║                                                                           ║
+    ║  L = (L_i2t + L_t2i) / 2                                                  ║
+    ║                                                                           ║
+    ║  where:                                                                   ║
+    ║    L_i2t = -1/N Σ_i log[exp(sim(i_i, t_i) / τ) / Σ_j exp(sim(i_i, t_j) / τ)]║
+    ║    L_t2i = -1/N Σ_i log[exp(sim(t_i, i_i) / τ) / Σ_j exp(sim(t_i, i_j) / τ)]║
+    ║                                                                           ║
+    ║  This creates a symmetric loss that learns from both directions.          ║
+    ╚═══════════════════════════════════════════════════════════════════════════╝
+    """
+    batch_size = image_features.shape[0]
+
+    # Compute similarity matrix
+    logits = (image_features @ text_features.T) * torch.exp(logit_scale) / temperature
+
+    # Create labels (diagonal = correct pairs)
+    labels = torch.arange(batch_size, device=logits.device)
+
+    # Cross-entropy loss (both directions)
+    loss_i2t = F.cross_entropy(logits, labels)
+    loss_t2i = F.cross_entropy(logits.T, labels)
+
+    loss = (loss_i2t + loss_t2i) / 2
+
+    # Compute accuracy
+    with torch.no_grad():
+        pred_i2t = logits.argmax(dim=1)
+        accuracy = (pred_i2t == labels).float().mean()
+
+    return loss, accuracy
+
+
+# =============================================================================
+# 2. SigLIP - Sigmoid Loss for Language-Image Pre-training
+# =============================================================================
+
+def siglip_loss(
+    image_features: torch.Tensor,
+    text_features: torch.Tensor,
+    logit_scale: torch.Tensor,
+    logit_bias: Optional[torch.Tensor] = None,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    SigLIP-style contrastive loss with sigmoid (not softmax).
+
+    Unlike CLIP which uses softmax cross-entropy across the batch dimension,
+    SigLIP treats each image-text pair as an independent binary classification
+    problem using sigmoid + log-loss. This removes the need for global batch
+    statistics and works better with small/local batches.
+
+    Args:
+        image_features: Normalized image features (batch, dim)
+        text_features: Normalized text features (batch, dim)
+        logit_scale: Learnable temperature scale
+        logit_bias: Optional learnable bias (SigLIP uses this)
+
+    Returns:
+        loss: Average sigmoid loss across all pairs
+        accuracy: Top-1 accuracy (diagonal matches)
+
+    ╔═══════════════════════════════════════════════════════════════════════════╗
+    ║  CLIP vs SigLIP Loss:                                                     ║
+    ║                                                                           ║
+    ║  CLIP (Softmax):                                                          ║
+    ║    L = CrossEntropy(logits, labels)  ← requires batch-level normalization ║
+    ║                                                                           ║
+    ║  SigLIP (Sigmoid):                                                        ║
+    ║    L = -1/N² Σ_i Σ_j [y_ij log σ(z_ij) + (1-y_ij) log(1-σ(z_ij))]      ║
+    ║    where y_ij = 1 if i==j (match), 0 otherwise                           ║
+    ║    z_ij = scale * (image_i · text_j) + bias                              ║
+    ║    ← each pair is independent, no batch normalization needed              ║
+    ╚═══════════════════════════════════════════════════════════════════════════╝
+    """
+    batch_size = image_features.shape[0]
+
+    # Compute pairwise similarity matrix
+    logits = logit_scale * (image_features @ text_features.T)
+    if logit_bias is not None:
+        logits = logits + logit_bias
+
+    # Create binary labels: diagonal = 1 (match), off-diagonal = 0 (no match)
+    labels = torch.eye(batch_size, device=logits.device)
+
+    # Sigmoid binary cross-entropy (each pair is independent)
+    # Use log-sigmoid for numerical stability
+    log_sig = -F.logsigmoid(-logits)  # log(sigmoid(x))
+    log_one_minus_sig = -F.logsigmoid(logits)  # log(1 - sigmoid(x))
+
+    loss = -(labels * log_sig + (1 - labels) * log_one_minus_sig)
+    loss = loss.mean()
+
+    # Compute accuracy
+    with torch.no_grad():
+        pred_i2t = logits.argmax(dim=1)
+        accuracy = (pred_i2t == torch.arange(batch_size, device=logits.device)).float().mean()
+
+    return loss, accuracy
+
+
+class SigLIPEncoder(nn.Module):
+    """
+    Simplified SigLIP encoder pair (vision + text).
+
+    SigLIP is used in Gemma 4's vision encoder (SigLIP-So400m).
+    Key differences from CLIP:
+    1. Sigmoid loss instead of softmax cross-entropy
+    2. Learnable bias in addition to temperature scale
+    3. Typically trained with larger learning rates
+
+    Args:
+        image_embed_dim: Vision encoder output dimension
+        text_embed_dim: Text encoder output dimension
+        projection_dim: Shared projection space
+    """
+
+    def __init__(
+        self,
+        image_embed_dim: int,
+        text_embed_dim: int,
+        projection_dim: int = 512,
+    ):
+        super().__init__()
+        self.image_proj = nn.Linear(image_embed_dim, projection_dim)
+        self.text_proj = nn.Linear(text_embed_dim, projection_dim)
+        self.logit_scale = nn.Parameter(torch.ones([]) * 10.0)  # SigLIP init ~10
+        self.logit_bias = nn.Parameter(torch.zeros([]))
+
+    def forward(
+        self,
+        image_features: torch.Tensor,
+        text_features: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Project and normalize both modalities.
+
+        Returns:
+            image_proj: Normalized image projections
+            text_proj: Normalized text projections
+            logits: Raw similarity logits (with scale and bias applied)
+        """
+        image_proj = F.normalize(self.image_proj(image_features), dim=-1)
+        text_proj = F.normalize(self.text_proj(text_features), dim=-1)
+        logits = self.logit_scale * (image_proj @ text_proj.T) + self.logit_bias
+        return image_proj, text_proj, logits
+
+
+# =============================================================================
+# 3. Vision Transformer (ViT) Components
 # =============================================================================
 
 @dataclass
@@ -578,9 +787,78 @@ def demo():
     print("MULTIMODAL / VISION-LANGUAGE MODELS DEMONSTRATION")
     print("=" * 80)
 
-    # 1. Patch Embedding
+    # 1. CLIP Contrastive Learning
     print("\n" + "-" * 80)
-    print("1. PATCH EMBEDDING")
+    print("1. CLIP-STYLE CONTRASTIVE LEARNING")
+    print("-" * 80)
+
+    batch_size = 8
+    embed_dim = 256
+    projection_dim = 128
+
+    # Create encoders
+    image_encoder = CLIPStyleEncoder(embed_dim, projection_dim)
+    text_encoder = CLIPStyleEncoder(embed_dim, projection_dim)
+
+    # Simulate embeddings
+    image_embeddings = torch.randn(batch_size, embed_dim)
+    text_embeddings = torch.randn(batch_size, embed_dim)
+
+    # Encode
+    image_features = image_encoder(image_embeddings)
+    text_features = text_encoder(text_embeddings)
+
+    print(f"\nImage features shape: {image_features.shape}")
+    print(f"Text features shape: {text_features.shape}")
+
+    # Compute loss
+    logit_scale = torch.tensor(0.07)
+    loss, accuracy = contrastive_loss(image_features, text_features, logit_scale)
+
+    print(f"\nContrastive loss: {loss.item():.4f}")
+    print(f"Top-1 accuracy: {accuracy.item() * 100:.1f}%")
+
+    # Show similarity matrix
+    with torch.no_grad():
+        sim_matrix = (image_features @ text_features.T)
+        print("\nSimilarity matrix (first 4x4):")
+        print("─" * 40)
+        for i in range(min(4, batch_size)):
+            row = sim_matrix[i, :4].tolist()
+            print("  " + "  ".join([f"{s:6.3f}" for s in row]))
+
+    print("""
+    CLIP Training Tips:
+    - Use large batch sizes (thousands of pairs)
+    - Temperature scaling is crucial
+    - Data augmentation for images helps
+    - Learnable logit_scale improves performance
+    """)
+
+    # 2. SigLIP
+    print("\n" + "-" * 80)
+    print("2. SigLIP CONTRASTIVE LEARNING")
+    print("-" * 80)
+
+    siglip = SigLIPEncoder(embed_dim, embed_dim, projection_dim)
+    image_proj_s, text_proj_s, logits_s = siglip(image_embeddings, text_embeddings)
+
+    loss_s, acc_s = siglip_loss(image_proj_s, text_proj_s, siglip.logit_scale, siglip.logit_bias)
+
+    print(f"\nSigLIP image projections shape: {image_proj_s.shape}")
+    print(f"SigLIP text projections shape:  {text_proj_s.shape}")
+    print(f"SigLIP loss: {loss_s.item():.4f}")
+    print(f"SigLIP top-1 accuracy: {acc_s.item() * 100:.1f}%")
+    print("""
+    SigLIP advantages over CLIP:
+    - Sigmoid loss: no batch normalization needed, works with small batches
+    - Learnable bias: better calibration of similarity scores
+    - Used in Gemma 4's SigLIP-So400m vision encoder
+    """)
+
+    # 3. Patch Embedding
+    print("\n" + "-" * 80)
+    print("3. PATCH EMBEDDING")
     print("-" * 80)
 
     batch_size = 2
@@ -601,7 +879,7 @@ def demo():
 
     # 2. Vision Transformer
     print("\n" + "-" * 80)
-    print("2. VISION TRANSFORMER (ViT)")
+    print("4. VISION TRANSFORMER (ViT)")
     print("-" * 80)
 
     vit_config = ViTConfig(
@@ -625,7 +903,7 @@ def demo():
 
     # 3. Cross-Attention
     print("\n" + "-" * 80)
-    print("3. CROSS-ATTENTION FOR MULTIMODAL FUSION")
+    print("5. CROSS-ATTENTION FOR MULTIMODAL FUSION")
     print("-" * 80)
 
     cross_attn = CrossAttention(d_model=256, num_heads=8)
@@ -641,7 +919,7 @@ def demo():
 
     # 4. Perceiver Resampler
     print("\n" + "-" * 80)
-    print("4. PERCEIVER RESAMPLER")
+    print("6. PERCEIVER RESAMPLER")
     print("-" * 80)
 
     resampler = PerceiverResampler(
@@ -661,18 +939,18 @@ def demo():
 
     # 5. Architecture Comparison
     print("\n" + "-" * 80)
-    print("5. VISION-LANGUAGE ARCHITECTURES COMPARISON")
+    print("7. VISION-LANGUAGE ARCHITECTURES COMPARISON")
     print("-" * 80)
     print("""
     ┌─────────────────┬─────────────────────────┬─────────────────────────────┐
     │ Model           │ Vision Encoder          │ Fusion Method               │
     ├─────────────────┼─────────────────────────┼─────────────────────────────┤
-    │ CLIP            │ ViT                     │ Contrastive (separate)      │
+    │ CLIP            │ ViT                     │ Softmax contrastive         │
+    │ SigLIP          │ ViT                     │ Sigmoid contrastive         │
     │ Flamingo        │ NFNet + Perceiver       │ Cross-Attention + Gated XATN│
     │ BLIP-2          │ ViT + Q-Former          │ Query Transformer           │
     │ LLaVA           │ CLIP ViT                │ Simple projection           │
-    │ GPT-4V          │ Unknown                 │ Unknown                     │
-    │ Gemini          │ Unknown                 │ Native multimodal           │
+    │ Gemma 4         │ SigLIP-So400m           │ Projection + RMSNorm        │
     └─────────────────┴─────────────────────────┴─────────────────────────────┘
 
     Fusion strategies:
@@ -697,10 +975,7 @@ def demo():
     - Use smaller learning rate for cross-attention
     - Pretrain on image-text pairs before instruction tuning
 
-    This completes the LLM Learning Materials!
-    All modules: Tokenizer → Embeddings → Attention → RoPE → SwiGLU → MoE
-                 → Transformer → Model → Training → Advanced → Efficiency
-                 → Fine-tuning → Alignment → Multimodal
+    Next: beyond_text/mamba_ssm.py - State Space Models (Mamba)
     """)
 
 

@@ -1,6 +1,6 @@
 """
 ================================================================================
-LLM Learning Module 15: MAMBA / STATE SPACE MODELS (SSM)
+MAMBA / STATE SPACE MODELS (SSM)
 ================================================================================
 
 Mamba is a new architecture that challenges Transformers by offering:

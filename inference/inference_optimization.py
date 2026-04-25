@@ -1,15 +1,13 @@
 """
 ================================================================================
-LLM Learning Module 11: EFFICIENCY TECHNIQUES
+INFERENCE OPTIMIZATION
 ================================================================================
 
-Modern LLM efficiency techniques for faster training and inference:
+Techniques for faster and more memory-efficient inference:
 
 1. Flash Attention - Memory-efficient attention computation
 2. KV Cache - Cache key-value pairs for faster generation
 3. Sliding Window Attention - Handle long contexts efficiently
-4. ALiBi - Alternative positional encoding
-5. Gradient Checkpointing - Trade compute for memory
 
 ================================================================================
 ILLUSTRATION: Flash Attention
@@ -457,194 +455,13 @@ class SlidingWindowAttention(nn.Module):
 
 
 # =============================================================================
-# 4. ALiBi (Attention with Linear Biases)
-# =============================================================================
-
-class ALiBiAttention(nn.Module):
-    """
-    Attention with Linear Biases (ALiBi).
-
-    Instead of adding positional embeddings, ALiBi adds a static bias
-    to attention scores based on distance. This bias decreases linearly
-    with distance, allowing the model to extrapolate to longer sequences.
-
-    Args:
-        d_model: Model dimension
-        num_heads: Number of attention heads
-        max_seq_len: Maximum sequence length
-
-    ╔═══════════════════════════════════════════════════════════════════════════╗
-    ║  ALiBi Bias Matrix:                                                       ║
-    ║                                                                           ║
-    ║  bias = -m × |i - j|  where m is head-specific slope                      ║
-    ║                                                                           ║
-    ║  For m = 0.5:                                                             ║
-    ║       pos:  0    1    2    3    4                                        ║
-    ║  ┌─────────────────────────────────────┐                                  ║
-    ║  │  0   -0.5  -1.0  -1.5  -2.0  │  pos 0                                 ║
-    ║  │ -0.5   0   -0.5  -1.0  -1.5  │  pos 1                                 ║
-    ║  │ -1.0  -0.5   0   -0.5  -1.0  │  pos 2                                 ║
-    ║  │ -1.5  -1.0  -0.5   0   -0.5  │  pos 3                                 ║
-    ║  │ -2.0  -1.5  -1.0  -0.5   0   │  pos 4                                 ║
-    ║  └─────────────────────────────────────┘                                  ║
-    ║                                                                           ║
-    ║  Different heads use different slopes: m_h = 1 / 2^(8h/H)                ║
-    ║  Head 0: 1/256, Head 1: 1/128, ... (geometric sequence)                  ║
-    ╚═══════════════════════════════════════════════════════════════════════════╝
-    """
-
-    def __init__(self, d_model: int, num_heads: int, max_seq_len: int):
-        super().__init__()
-        self.d_model = d_model
-        self.num_heads = num_heads
-        self.d_k = d_model // num_heads
-
-        self.w_q = nn.Linear(d_model, d_model, bias=False)
-        self.w_k = nn.Linear(d_model, d_model, bias=False)
-        self.w_v = nn.Linear(d_model, d_model, bias=False)
-        self.w_o = nn.Linear(d_model, d_model, bias=False)
-
-        # Compute ALiBi slopes for each head
-        # m_h = 1 / 2^(8h/H) for h = 0, 1, ..., H-1
-        slopes = 1.0 / (2 ** (8 * torch.arange(num_heads) / num_heads))
-        self.register_buffer("slopes", slopes)
-
-        # Precompute distance matrix
-        distance = torch.abs(
-            torch.arange(max_seq_len).unsqueeze(0) -
-            torch.arange(max_seq_len).unsqueeze(1)
-        )
-        self.register_buffer("distance", distance)
-
-        # Causal mask
-        mask = torch.tril(torch.ones(max_seq_len, max_seq_len))
-        self.register_buffer("mask", mask.unsqueeze(0).unsqueeze(0))
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        batch_size, seq_len, _ = x.shape
-
-        q = self.w_q(x).view(batch_size, seq_len, self.num_heads, self.d_k).transpose(1, 2)
-        k = self.w_k(x).view(batch_size, seq_len, self.num_heads, self.d_k).transpose(1, 2)
-        v = self.w_v(x).view(batch_size, seq_len, self.num_heads, self.d_k).transpose(1, 2)
-
-        scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.d_k)
-
-        # Add ALiBi bias
-        # slopes: (num_heads,), distance: (seq_len, seq_len)
-        # bias: (num_heads, seq_len, seq_len)
-        alibi_bias = -self.slopes.view(-1, 1, 1) * self.distance[:seq_len, :seq_len].unsqueeze(0)
-        scores = scores + alibi_bias.unsqueeze(0)
-
-        # Apply causal mask
-        scores = scores.masked_fill(self.mask[:, :, :seq_len, :seq_len] == 0, float('-inf'))
-
-        attn_weights = F.softmax(scores, dim=-1)
-        out = torch.matmul(attn_weights, v)
-
-        out = out.transpose(1, 2).contiguous().view(batch_size, seq_len, self.d_model)
-        return self.w_o(out)
-
-
-# =============================================================================
-# 5. Gradient Checkpointing
-# =============================================================================
-
-class CheckpointedTransformerBlock(nn.Module):
-    """
-    Transformer Block with Gradient Checkpointing.
-
-    Gradient checkpointing trades compute for memory by not storing
-    intermediate activations during forward pass. Instead, they are
-    recomputed during backward pass.
-
-    Memory: O(L) → O(sqrt(L)) with checkpointing
-    Compute: +33% overhead for recomputation
-
-    Args:
-        d_model: Model dimension
-        d_ff: Feed-forward hidden dimension
-        num_heads: Number of attention heads
-        max_seq_len: Maximum sequence length
-        use_checkpoint: Whether to use gradient checkpointing
-    """
-
-    def __init__(
-        self,
-        d_model: int,
-        d_ff: int,
-        num_heads: int,
-        max_seq_len: int,
-        use_checkpoint: bool = True,
-    ):
-        super().__init__()
-        self.use_checkpoint = use_checkpoint
-
-        self.attention = RoPEAttention(d_model, num_heads, max_seq_len)
-        self.ffn = nn.Sequential(
-            nn.Linear(d_model, d_ff, bias=False),
-            nn.SiLU(),
-            nn.Linear(d_ff, d_model, bias=False),
-        )
-        self.norm1 = nn.LayerNorm(d_model)
-        self.norm2 = nn.LayerNorm(d_model)
-
-    def _forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Actual forward computation."""
-        x = x + self.attention(self.norm1(x))
-        x = x + self.ffn(self.norm2(x))
-        return x
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward with optional checkpointing."""
-        if self.use_checkpoint and self.training:
-            return torch.utils.checkpoint.checkpoint(
-                self._forward, x, use_reentrant=False
-            )
-        else:
-            return self._forward(x)
-
-
-# Simplified RoPE Attention for checkpointing demo
-class RoPEAttention(nn.Module):
-    def __init__(self, d_model: int, num_heads: int, max_seq_len: int):
-        super().__init__()
-        self.d_model = d_model
-        self.num_heads = num_heads
-        self.d_k = d_model // num_heads
-
-        self.w_q = nn.Linear(d_model, d_model, bias=False)
-        self.w_k = nn.Linear(d_model, d_model, bias=False)
-        self.w_v = nn.Linear(d_model, d_model, bias=False)
-        self.w_o = nn.Linear(d_model, d_model, bias=False)
-
-        mask = torch.tril(torch.ones(max_seq_len, max_seq_len)).unsqueeze(0).unsqueeze(0)
-        self.register_buffer("mask", mask)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        batch_size, seq_len, _ = x.shape
-
-        q = self.w_q(x).view(batch_size, seq_len, self.num_heads, self.d_k).transpose(1, 2)
-        k = self.w_k(x).view(batch_size, seq_len, self.num_heads, self.d_k).transpose(1, 2)
-        v = self.w_v(x).view(batch_size, seq_len, self.num_heads, self.d_k).transpose(1, 2)
-
-        scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.d_k)
-        scores = scores.masked_fill(self.mask[:, :, :seq_len, :seq_len] == 0, float('-inf'))
-
-        attn_weights = F.softmax(scores, dim=-1)
-        out = torch.matmul(attn_weights, v)
-
-        out = out.transpose(1, 2).contiguous().view(batch_size, seq_len, self.d_model)
-        return self.w_o(out)
-
-
-# =============================================================================
 # DEMONSTRATION
 # =============================================================================
 
 def demo():
-    """Demonstrate efficiency techniques."""
+    """Demonstrate inference optimization techniques."""
     print("=" * 80)
-    print("EFFICIENCY TECHNIQUES DEMONSTRATION")
+    print("INFERENCE OPTIMIZATION TECHNIQUES")
     print("=" * 80)
 
     d_model = 64
@@ -686,6 +503,7 @@ def demo():
         max_seq_len=128,
         d_k=d_model // num_heads,
         device=x.device,
+        dtype=x.dtype,
     )
 
     # First token (prefill)
@@ -715,64 +533,17 @@ def demo():
     - Sliding window (W=4): O({seq_len} × 4) = {seq_len * 4} operations
     """)
 
-    # 4. ALiBi
-    print("-" * 80)
-    print("4. ALiBi (ATTENTION WITH LINEAR BIASES)")
-    print("-" * 80)
-
-    alibi_attn = ALiBiAttention(d_model, num_heads, max_seq_len=128)
-    alibi_out = alibi_attn(x)
-
-    print(f"ALiBi slopes per head: {alibi_attn.slopes.tolist()}")
-    print(f"""
-    ALiBi Benefits:
-    - No learned positional parameters
-    - Better length extrapolation than RoPE
-    - Simple to implement (just add bias)
-    - Works well for training short, inference long
-    """)
-
-    # 5. Gradient Checkpointing
-    print("-" * 80)
-    print("5. GRADIENT CHECKPOINTING")
-    print("-" * 80)
-
-    checkpointed_block = CheckpointedTransformerBlock(
-        d_model, d_ff=128, num_heads=num_heads, max_seq_len=128, use_checkpoint=True
-    )
-
-    # Compare memory (conceptual)
-    print("""
-    Memory savings with gradient checkpointing:
-
-    Without checkpointing:
-    - Store all L layer activations
-    - Memory: O(L × N × D)
-
-    With checkpointing (checkpoint every √L layers):
-    - Store √L checkpoints, recompute between
-    - Memory: O(√L × N × D)
-    - Compute: +33% for recomputation
-
-    Example: 48-layer model
-    - Without: 48 × activations
-    - With: 7 × activations (85% reduction!)
-    """)
-
     # Summary comparison
     print("\n" + "-" * 80)
-    print("EFFICIENCY TECHNIQUES SUMMARY")
+    print("INFERENCE OPTIMIZATION SUMMARY")
     print("-" * 80)
     print("""
     ┌────────────────────────┬─────────────────────┬──────────────────────┐
-    │ Technique              │ Memory Benefit      │ Compute Impact       │
+    │ Technique              │ Memory Benefit      │ Speed Impact         │
     ├────────────────────────┼─────────────────────┼──────────────────────┤
     │ Flash Attention        │ O(N²) → O(N)        │ Faster on GPU        │
     │ KV Cache               │ Recompute → Cache   │ Generation 10x+      │
     │ Sliding Window         │ O(N²) → O(N×W)      │ Proportional to W    │
-    │ ALiBi                  │ No pos embed        │ Negligible           │
-    │ Gradient Checkpoint    │ O(L) → O(√L)        │ +33% recomputation   │
-    │ Mixed Precision        │ FP32 → FP16/BF16    │ 2x faster            │
     └────────────────────────┴─────────────────────┴──────────────────────┘
     """)
 
@@ -783,10 +554,8 @@ def demo():
     1. Flash Attention: Use for any attention layer (automatic in PyTorch 2.0+)
     2. KV Cache: Essential for fast autoregressive generation
     3. Sliding Window: Great for long documents (Mistral uses this)
-    4. ALiBi: Alternative to RoPE with better extrapolation
-    5. Gradient Checkpointing: Trade compute for memory in large models
 
-    Next: 12_finetuning.py - LoRA, QLoRA, and Parameter-Efficient Fine-tuning
+    Next: adaptation/parameter_efficient_finetuning.py - LoRA & Fine-tuning
     """)
 
 

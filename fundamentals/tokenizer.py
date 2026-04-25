@@ -1,6 +1,6 @@
 """
 ================================================================================
-LLM Learning Module 1: TOKENIZER
+TOKENIZER (BPE)
 ================================================================================
 
 What is a Tokenizer?
@@ -331,7 +331,7 @@ def demo():
     4. Modern tokenizers (GPT-4, LLaMA) use byte-level BPE for better handling
        of unknown characters and multilingual text
 
-    Next: 02_embeddings.py - How tokens become dense vectors
+    Next: fundamentals/embeddings.py - Token & Position Embeddings
     """)
 
 

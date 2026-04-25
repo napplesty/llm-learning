@@ -1,6 +1,6 @@
 """
 ================================================================================
-LLM Learning Module 3: ATTENTION
+ATTENTION MECHANISMS
 ================================================================================
 
 What is Attention?
@@ -487,7 +487,7 @@ def demo():
     4. Grouped Query Attention (GQA) reduces KV cache size while maintaining quality
     5. Scale factor √d_k prevents softmax from becoming too peaked
 
-    Next: 04_rope.py - Rotary Position Embeddings
+    Next: position_and_activation/rope.py - Position Encodings
     """)
 
 

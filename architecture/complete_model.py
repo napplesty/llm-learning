@@ -1,6 +1,6 @@
 """
 ================================================================================
-LLM Learning Module 8: COMPLETE LLM MODEL
+COMPLETE LLM MODEL
 ================================================================================
 
 This module assembles all the components into a complete language model:
@@ -589,7 +589,7 @@ def demo():
     5. Memory scales with model size and sequence length
     6. This ~13M param model is good for learning, not production
 
-    Next: 09_training.py - Training the Model
+    Next: training/training_loop.py - Training Pipeline
     """)
 
 

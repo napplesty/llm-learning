@@ -1,6 +1,6 @@
 """
 ================================================================================
-LLM Learning Module 6: MIXTURE OF EXPERTS (MoE)
+MIXTURE OF EXPERTS (MoE)
 ================================================================================
 
 What is Mixture of Experts?
@@ -558,7 +558,7 @@ def demo():
     - Mixtral 8x7B: 47B params, 13B active per token (top-2)
     - Switch Transformer: 1.6T params, 2B active per token
 
-    Next: 07_megablock.py - Efficient MoE Implementation
+    Next: architecture/complete_model.py - Complete LLM
     """)
 
 

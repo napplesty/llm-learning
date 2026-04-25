@@ -11,7 +11,7 @@ Usage:
     python run_all.py [--module MODULE_NUM] [--skip-training]
 
 Options:
-    --module MODULE_NUM    Run only a specific module (1-10)
+    --module MODULE_NUM    Run only a specific module (1-16)
     --skip-training        Skip the training demo (module 9)
 
 ================================================================================
@@ -60,20 +60,25 @@ def print_module_header(num: int, title: str):
 def run_module(module_num: int, skip_training: bool = False):
     """Run a specific module."""
     modules = {
-        1: ("01_tokenizer.py", "TOKENIZER (BPE)"),
-        2: ("02_embeddings.py", "EMBEDDINGS"),
-        3: ("03_attention.py", "ATTENTION"),
-        4: ("04_rope.py", "ROTARY POSITION EMBEDDINGS"),
-        5: ("05_swiglu.py", "SwiGLU ACTIVATION"),
-        6: ("06_moe.py", "MIXTURE OF EXPERTS"),
-        7: ("07_transformer.py", "TRANSFORMER BLOCK"),
-        8: ("08_model.py", "COMPLETE LLM MODEL"),
-        9: ("09_training.py", "TRAINING PIPELINE"),
-        10: ("10_advanced.py", "ADVANCED TOPICS"),
-        11: ("11_efficiency.py", "EFFICIENCY TECHNIQUES"),
-        12: ("12_finetuning.py", "FINE-TUNING (LoRA/DPO)"),
-        13: ("13_alignment.py", "MODEL ALIGNMENT"),
-        14: ("14_multimodal.py", "MULTIMODAL MODELS"),
+        1: ("fundamentals/tokenizer.py", "TOKENIZER (BPE)"),
+        2: ("fundamentals/embeddings.py", "EMBEDDINGS"),
+        3: ("fundamentals/attention.py", "ATTENTION MECHANISMS"),
+        4: ("position_and_activation/rope.py", "POSITION ENCODINGS (RoPE & ALiBi)"),
+        5: ("position_and_activation/swiglu.py", "SwiGLU ACTIVATION"),
+        6: ("architecture/transformer_block.py", "TRANSFORMER BLOCK"),
+        7: ("architecture/mixture_of_experts.py", "MIXTURE OF EXPERTS"),
+        8: ("architecture/complete_model.py", "COMPLETE LLM MODEL"),
+        9: ("training/training_loop.py", "TRAINING PIPELINE"),
+        10: ("training/optimizers_and_checkpoint.py", "ADVANCED OPTIMIZERS & CHECKPOINTING"),
+        11: ("inference/inference_optimization.py", "INFERENCE OPTIMIZATION"),
+        12: ("adaptation/parameter_efficient_finetuning.py", "PARAMETER-EFFICIENT FINE-TUNING"),
+        13: ("alignment/alignment.py", "MODEL ALIGNMENT"),
+        14: ("alignment/grpo.py", "GROUP RELATIVE POLICY OPTIMIZATION"),
+        15: ("beyond_text/multimodal.py", "MULTIMODAL / VISION-LANGUAGE MODELS"),
+        16: ("beyond_text/mamba_ssm.py", "MAMBA / STATE SPACE MODELS"),
+        17: ("inference/mla.py", "MULTI-HEAD LATENT ATTENTION"),
+        18: ("architecture/hyper_connections.py", "MANIFOLD-CONSTRAINED HYPER-CONNECTIONS"),
+        19: ("architecture/engram.py", "ENGRAM — CONDITIONAL MEMORY"),
     }
 
     if module_num not in modules:
@@ -120,97 +125,54 @@ def print_curriculum():
 ║                            CURRICULUM OVERVIEW                                  ║
 ╠═════════════════════════════════════════════════════════════════════════════════╣
 ║                                                                                 ║
-║  Module 1: TOKENIZER                                                           ║
+║  FUNDAMENTALS                                                                   ║
 ║  ─────────────────────                                                          ║
 ║  • Byte Pair Encoding (BPE) algorithm                                          ║
 ║  • Training a tokenizer from scratch                                           ║
-║  • Encoding and decoding text                                                   ║
-║                                                                                 ║
-║  Module 2: EMBEDDINGS                                                          ║
-║  ─────────────────────                                                          ║
-║  • Token embeddings                                                             ║
-║  • Positional embeddings (sinusoidal vs learned)                               ║
-║  • RMSNorm vs LayerNorm                                                        ║
-║                                                                                 ║
-║  Module 3: ATTENTION                                                           ║
-║  ─────────────────────                                                          ║
+║  • Token and positional embeddings                                             ║
+║  • LayerNorm vs RMSNorm                                                        ║
 ║  • Scaled dot-product attention                                                 ║
-║  • Multi-head attention                                                         ║
-║  • Causal (autoregressive) attention                                            ║
-║  • Grouped Query Attention (GQA)                                               ║
+║  • Multi-head and causal attention                                             ║
 ║                                                                                 ║
-║  Module 4: ROTARY POSITION EMBEDDINGS (RoPE)                                   ║
-║  ─────────────────────────────────────────                                     ║
-║  • Rotation-based position encoding                                            ║
-║  • Relative position properties                                                ║
-║  • Implementation details                                                       ║
+║  POSITION & ACTIVATION                                                          ║
+║  ─────────────────────                                                          ║
+║  • Rotary Position Embeddings (RoPE)                                           ║
+║  • ALiBi (Attention with Linear Biases)                                        ║
+║  • SwiGLU activation and gated FFN                                             ║
 ║                                                                                 ║
-║  Module 5: SwiGLU ACTIVATION                                                   ║
-║  ─────────────────────────                                                      ║
-║  • Gated Linear Units (GLU)                                                    ║
-║  • Swish/SiLU activation                                                        ║
-║  • Comparison with standard FFN                                                ║
+║  ARCHITECTURE                                                                   ║
+║  ─────────────────────                                                          ║
+║  • Transformer block with pre-norm and residuals                               ║
+║  • Mixture of Experts (MoE) routing                                            ║
+║  • Complete LLM assembly (~0.1B params)                                        ║
 ║                                                                                 ║
-║  Module 6: MIXTURE OF EXPERTS (MoE)                                            ║
-║  ────────────────────────────────                                              ║
-║  • Expert networks                                                              ║
-║  • Top-k routing                                                                ║
-║  • Load balancing loss                                                          ║
-║  • Switch Transformer                                                           ║
+║  TRAINING                                                                       ║
+║  ─────────────────────                                                          ║
+║  • Training loop, LR scheduling, mixed precision                               ║
+║  • Muon optimizer (orthogonalized momentum)                                    ║
+║  • Gradient checkpointing for memory efficiency                                ║
 ║                                                                                 ║
-║  Module 7: TRANSFORMER BLOCK                                                   ║
-║  ─────────────────────────                                                      ║
-║  • Combining all components                                                     ║
-║  • Pre-norm architecture                                                        ║
-║  • Residual connections                                                         ║
-║                                                                                 ║
-║  Module 8: COMPLETE LLM MODEL                                                  ║
-║  ─────────────────────────                                                      ║
-║  • Full model assembly                                                          ║
-║  • Parameter counting                                                           ║
-║  • Text generation                                                              ║
-║                                                                                 ║
-║  Module 9: TRAINING PIPELINE                                                   ║
-║  ─────────────────────────                                                      ║
-║  • Data preparation                                                             ║
-║  • Learning rate scheduling                                                     ║
-║  • Gradient accumulation                                                        ║
-║  • Mixed precision training                                                     ║
-║                                                                                 ║
-║  Module 10: ADVANCED TOPICS                                                    ║
-║  ─────────────────────────                                                      ║
-║  • Muon optimizer (momentum + orthogonalization)                               ║
-║  • CLIP contrastive learning                                                   ║
-║  • Modern techniques overview                                                  ║
-║                                                                                 ║
-║  Module 11: EFFICIENCY TECHNIQUES                                              ║
-║  ───────────────────────────────                                               ║
+║  INFERENCE                                                                      ║
+║  ─────────────────────                                                          ║
 ║  • Flash Attention (memory-efficient)                                          ║
-║  • KV Cache for generation                                                     ║
-║  • Sliding Window Attention                                                    ║
-║  • ALiBi positional encoding                                                   ║
-║  • Gradient checkpointing                                                      ║
+║  • KV Cache for autoregressive generation                                      ║
+║  • Sliding Window Attention for long contexts                                  ║
 ║                                                                                 ║
-║  Module 12: FINE-TUNING (PEFT)                                                 ║
-║  ──────────────────────────────                                                ║
+║  ADAPTATION                                                                     ║
+║  ─────────────────────                                                          ║
 ║  • LoRA (Low-Rank Adaptation)                                                  ║
-║  • QLoRA (Quantized LoRA)                                                      ║
-║  • Prefix Tuning                                                               ║
-║  • Adapter layers                                                              ║
+║  • QLoRA, Prefix Tuning, Adapter layers                                        ║
 ║                                                                                 ║
-║  Module 13: MODEL ALIGNMENT                                                    ║
-║  ───────────────────────────                                                   ║
-║  • RLHF (Reinforcement Learning from Human Feedback)                           ║
-║  • PPO (Proximal Policy Optimization)                                          ║
-║  • DPO (Direct Preference Optimization)                                        ║
-║  • Constitutional AI                                                           ║
+║  ALIGNMENT                                                                      ║
+║  ─────────────────────                                                          ║
+║  • RLHF, DPO, PPO for human preference alignment                               ║
+║  • GRPO (Group Relative Policy Optimization)                                   ║
 ║                                                                                 ║
-║  Module 14: MULTIMODAL MODELS                                                  ║
-║  ────────────────────────────                                                  ║
-║  • Vision Transformer (ViT)                                                    ║
-║  • Patch embeddings                                                            ║
-║  • Cross-attention for multimodal fusion                                       ║
-║  • Perceiver resampler (Flamingo-style)                                        ║
+║  BEYOND TEXT                                                                    ║
+║  ─────────────────────                                                          ║
+║  • Vision Transformer and multimodal fusion                                    ║
+║  • CLIP contrastive learning                                                   ║
+║  • Mamba / State Space Models (linear complexity)                              ║
 ║                                                                                 ║
 ╚═════════════════════════════════════════════════════════════════════════════════╝
     """)
@@ -279,6 +241,8 @@ def print_resources():
 ║  • "LLaMA: Open and Efficient Foundation Language Models" (2023)               ║
 ║  • "Learning Transferable Visual Models From Natural Language Supervision"     ║
 ║    - CLIP (2021)                                                                ║
+║  • "Mamba: Linear-Time Sequence Modeling" (2023)                               ║
+║  • "DeepSeek-R1: Incentivizing Reasoning Capability in LLMs" (2025)            ║
 ║                                                                                 ║
 ║  Code Repositories:                                                             ║
 ║  ──────────────────                                                             ║
@@ -310,7 +274,7 @@ def main():
         "--module",
         type=int,
         default=None,
-        help="Run only a specific module (1-10)",
+        help="Run only a specific module (1-16)",
     )
     parser.add_argument(
         "--skip-training",
@@ -344,12 +308,12 @@ def main():
 
         input("\nPress Enter to start...")
 
-        for i in range(1, 15):
+        for i in range(1, 20):
             if not run_module(i, args.skip_training):
                 print(f"\nModule {i} failed. Stopping.")
                 break
 
-            if i < 14:
+            if i < 19:
                 input("\nPress Enter to continue to next module...")
 
         print("\n" + "=" * 80)

@@ -1,6 +1,6 @@
 """
 ================================================================================
-LLM Learning Module 12: PARAMETER-EFFICIENT FINE-TUNING (PEFT)
+PARAMETER-EFFICIENT FINE-TUNING (PEFT)
 ================================================================================
 
 Fine-tuning techniques that modify only a small subset of parameters:
@@ -778,7 +778,7 @@ def demo():
     - Combine with quantization for maximum efficiency
     - Save only adapter weights (tiny files)
 
-    Next: 13_alignment.py - RLHF, DPO, and Model Alignment
+    Next: alignment/alignment.py - Model Alignment (RLHF/DPO)
     """)
 
 
